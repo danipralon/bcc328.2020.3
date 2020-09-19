@@ -63,15 +63,71 @@ let rec check_exp env (pos, (exp, tref)) =
   | A.RealExp _ -> set tref T.REAL
   | A.StringExp _ -> set tref T.STRING
   | A.LetExp (decs, body) -> check_exp_let env pos tref decs body
+  | A.BinaryExp (left, op, right) ->
+    let tLeft = check_exp env left in
+    let tRight = check_exp env right in
+    begin match op with
+      | A.Plus 
+      | A.Minus 
+      | A.Div 
+      | A.Mod
+      | A.Times 
+      | A.Power ->
+          begin match tLeft, tRight with
+            | T.INT,  T.REAL 
+            | T.REAL, T.INT 
+            | T.REAL, T.REAL -> set tref T.REAL
+            | T.INT,  T.INT  -> set tref T.INT
+            | _              -> type_mismatch pos tLeft tRight
+          end   
+      | A.And
+      | A.Or ->
+        begin match tLeft, tRight with
+          | T.BOOL, T.BOOL -> set tref T.BOOL
+          | _ -> (match tLeft with
+              | T.BOOL -> type_mismatch pos T.BOOL tRight
+              | _ -> type_mismatch pos T.BOOL tLeft 
+            )
+        end
+      | A.Equal 
+      | A.NotEqual -> compatible tRight tLeft pos; set tref T.BOOL
+      | A.LowerThan 
+      | A.LowerEqual
+      | A.GreaterThan 
+      | A.GreaterEqual->
+        begin match tLeft with
+          | T.STRING -> (match tRight with T.STRING -> set tref T.BOOL |_ -> type_mismatch pos T.STRING tLeft)
+          | T.INT -> (match tRight with T.INT ->set tref T.BOOL |_ -> type_mismatch pos T.INT tLeft)
+          | T.REAL -> (match tRight with T.REAL -> set tref T.BOOL |_ -> type_mismatch pos T.REAL tLeft)
+          | _ -> Error.fatal "unimplemented"
+        end 
+    end
+  | A.BreakExp -> (match env.inloop with
+      |true -> T.VOID
+      |_ -> Error.error pos "Break error"
+      )
+  | A.WhileExp (test, body) -> let env' = {env with inloop = true} in
+      ignore(check_exp env' test);ignore(check_exp env' body); set tref T.VOID
+  | A.NegativeExp (exp) -> let result = check_exp env exp in 
+      begin match result with
+        | T.REAL -> set tref result
+        | T.INT 
+        | _ -> type_mismatch pos T.REAL result
+      end
+  | A.ExpSeq expList ->
+    let rec check_seq = function
+      | []        -> T.VOID
+      | [exp]     -> check_exp env exp
+      | exp::rest -> ignore (check_exp env exp); check_seq rest
+    in
+      check_seq expList
   | _ -> Error.fatal "unimplemented"
 
+(* Checking declarations *)
 and check_exp_let env pos tref decs body =
   let env' = List.fold_left check_dec env decs in
   let tbody = check_exp env' body in
   set tref tbody
-
-(* Checking declarations *)
-
 and check_dec_var env pos ((name, type_opt, init), tref) =
   let tinit = check_exp env init in
   let tvar =
